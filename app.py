@@ -15,16 +15,18 @@ def load_model():
 
 @st.cache_data
 def load_sample_data():
-    return pd.read_csv('credito_tratado.csv')
+    # Lê o CSV de referência
+    df = pd.read_csv('credito_tratado.csv')
+    # Remove a coluna alvo/target e colunas de id se existirem
+    cols_para_remover = [c for c in ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0'] if c in df.columns]
+    df_features = df.drop(columns=cols_para_remover)
+    return df_features
 
 pipeline = load_model()
 df_sample = load_sample_data()
 
 st.title("📊 Análise e Previsão de Score de Crédito")
 st.write("Insira os dados do cliente para calcular a probabilidade de inadimplência.")
-
-# Criar uma cópia da primeira linha do dataset para garantir a presença de todas as colunas esperadas
-dados_cliente = df_sample.drop(columns=['inadimplente'], errors='ignore').iloc[[0]].copy()
 
 # Formulário para entrada de dados
 with st.form("form_credito"):
@@ -43,20 +45,27 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # Atualizar as colunas editadas pelo utilizador no DataFrame com a estrutura completa
-    if 'idade' in dados_cliente.columns:
-        dados_cliente['idade'] = idade
-    if 'renda_mensal' in dados_cliente.columns:
-        dados_cliente['renda_mensal'] = renda_mensal
-    if 'num_linhas_credito' in dados_cliente.columns:
-        dados_cliente['num_linhas_credito'] = num_linhas_credito
-    if 'dependentes' in dados_cliente.columns:
-        dados_cliente['dependentes'] = dependentes
-    if 'restringido' in dados_cliente.columns:
-        dados_cliente['restringido'] = 1 if restringido == "Sim" else 0
-    if 'historico_inadimplencia' in dados_cliente.columns:
-        dados_cliente['historico_inadimplencia'] = 1 if historico_inadimplencia == "Sim" else 0
+    # Criar um DataFrame com 1 linha contendo EXATAMENTE todas as colunas do dataset original
+    dados_cliente = df_sample.iloc[[0]].copy()
     
+    # Sobra/Preenche os campos informados pelo formulário se a coluna existir
+    for col in dados_cliente.columns:
+        if col == 'idade':
+            dados_cliente[col] = idade
+        elif col in ['renda_mensal', 'renda']:
+            dados_cliente[col] = renda_mensal
+        elif col in ['num_linhas_credito', 'linhas_credito']:
+            dados_cliente[col] = num_linhas_credito
+        elif col in ['dependentes', 'num_dependentes']:
+            dados_cliente[col] = dependentes
+        elif col == 'restringido':
+            dados_cliente[col] = 1 if restringido == "Sim" else 0
+        elif col in ['historico_inadimplencia', 'inadimplente_anterior']:
+            dados_cliente[col] = 1 if historico_inadimplencia == "Sim" else 0
+
+    # Garantir a ordem exata das colunas
+    dados_cliente = dados_cliente[df_sample.columns]
+
     # Previsão
     prob = pipeline.predict_proba(dados_cliente)[0][1]
     
