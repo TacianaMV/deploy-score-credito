@@ -5,7 +5,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__ para desserialização do joblib
+# Injetar a classe customizada no __main__ para o joblib conseguir carregar
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -15,19 +15,19 @@ def load_model():
     return joblib.load('modelo_xgb_credito.joblib')
 
 @st.cache_data
-def load_raw_csv():
-    # Lê o dataset bruto de referência enviado para o repositório
+def load_sample_df():
+    # Lê o CSV enviado ao repositório
     df = pd.read_csv('credito_tratado.csv')
     cols_alvo = [c for c in ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0'] if c in df.columns]
     return df.drop(columns=cols_alvo)
 
 pipeline = load_model()
-df_raw = load_raw_csv()
+df_ref = load_sample_df()
 
 st.title("📊 Análise e Previsão de Score de Crédito")
 st.write("Insira os dados do cliente para calcular a probabilidade de inadimplência.")
 
-# Form de entrada
+# Formulário para entrada de dados
 with st.form("form_credito"):
     col1, col2 = st.columns(2)
     
@@ -44,19 +44,18 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Identificar a lista exata de colunas esperadas pelo estimador/imputer do pipeline
-    primeiro_passo = pipeline.steps[0][1] if hasattr(pipeline, 'steps') else None
-    
-    if primeiro_passo and hasattr(primeiro_passo, 'feature_names_in_'):
-        colunas_exatas = list(primeiro_passo.feature_names_in_)
-    elif hasattr(pipeline, 'feature_names_in_'):
-        colunas_exatas = list(pipeline.feature_names_in_)
-    else:
-        colunas_exatas = list(df_raw.columns)
+    # 1. Tentar identificar as colunas exatas do modelo
+    try:
+        colunas_modelo = list(pipeline.feature_names_in_)
+    except AttributeError:
+        try:
+            colunas_modelo = list(pipeline.steps[0][1].feature_names_in_)
+        except AttributeError:
+            colunas_modelo = list(df_ref.columns)
 
-    # 2. Reconstruir o DataFrame garantindo as colunas e tipos exatos esperados
+    # 2. Reconstruir a linha com as colunas do modelo
     dados_dict = {}
-    for col in colunas_exatas:
+    for col in colunas_modelo:
         c_lower = col.lower()
         if c_lower == 'idade':
             dados_dict[col] = float(idade)
@@ -71,15 +70,18 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_dict[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
         else:
-            # Caso o modelo tenha colunas secundárias, preenche com a média do CSV
-            dados_dict[col] = float(df_raw[col].dropna().mean()) if col in df_raw.columns else 0.0
+            dados_dict[col] = float(df_ref[col].dropna().mean()) if col in df_ref.columns else 0.0
 
-    # Criar o DataFrame na ordem exata exigida pelo scikit-learn
-    dados_cliente = pd.DataFrame([dados_dict])[colunas_exatas]
+    # DataFrame ordenado estritamente pelas colunas do modelo
+    dados_cliente = pd.DataFrame([dados_dict])[colunas_modelo]
 
-    # Previsão sem falhas de validação
-    prob = pipeline.predict_proba(dados_cliente)[0][1]
-    
+    # 3. Executar o cálculo garantindo compatibilidade (via DataFrame ou valores NumPy)
+    try:
+        prob = pipeline.predict_proba(dados_cliente)[0][1]
+    except ValueError:
+        # Se o scikit-learn reclamar do nome das colunas, passamos apenas a matriz numérica
+        prob = pipeline.predict_proba(dados_cliente.values)[0][1]
+
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
     
