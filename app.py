@@ -4,7 +4,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__
+# Injetar a classe customizada no __main__ para o joblib desmaterializar corretamente
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -13,20 +13,28 @@ st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
 def load_model():
     return joblib.load('modelo_xgb_credito.joblib')
 
-@st.cache_data
-def load_sample_data():
-    # Lê o CSV de referência
-    df = pd.read_csv('credito_tratado.csv')
-    # Remove a coluna alvo/target e colunas de id se existirem
-    cols_para_remover = [c for c in ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0'] if c in df.columns]
-    df_features = df.drop(columns=cols_para_remover)
-    return df_features
-
 pipeline = load_model()
-df_sample = load_sample_data()
 
 st.title("📊 Análise e Previsão de Score de Crédito")
 st.write("Insira os dados do cliente para calcular a probabilidade de inadimplência.")
+
+# Descobrir automaticamente os nomes das colunas esperadas pelo pipeline
+try:
+    # Tenta extrair diretamente as feature_names_in_ do primeiro passo do pipeline
+    primeiro_passo = pipeline.steps[0][1]
+    if hasattr(primeiro_passo, 'feature_names_in_'):
+        colunas_esperadas = list(primeiro_passo.feature_names_in_)
+    elif hasattr(pipeline, 'feature_names_in_'):
+        colunas_esperadas = list(pipeline.feature_names_in_)
+    else:
+        # Se não encontrar no pipeline, lê as colunas do CSV descartando o alvo
+        df_csv = pd.read_csv('credito_tratado.csv')
+        cols_alvo = ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0']
+        colunas_esperadas = [c for c in df_csv.columns if c not in cols_alvo]
+except Exception:
+    df_csv = pd.read_csv('credito_tratado.csv')
+    cols_alvo = ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0']
+    colunas_esperadas = [c for c in df_csv.columns if c not in cols_alvo]
 
 # Formulário para entrada de dados
 with st.form("form_credito"):
@@ -45,27 +53,28 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # Criar um DataFrame com 1 linha contendo EXATAMENTE todas as colunas do dataset original
-    dados_cliente = df_sample.iloc[[0]].copy()
+    # Criar um dicionário inicializado com valores predefinidos/nulos para todas as colunas
+    dados_dict = {col: [0] for col in colunas_esperadas}
     
-    # Sobra/Preenche os campos informados pelo formulário se a coluna existir
-    for col in dados_cliente.columns:
-        if col == 'idade':
-            dados_cliente[col] = idade
-        elif col in ['renda_mensal', 'renda']:
-            dados_cliente[col] = renda_mensal
-        elif col in ['num_linhas_credito', 'linhas_credito']:
-            dados_cliente[col] = num_linhas_credito
-        elif col in ['dependentes', 'num_dependentes']:
-            dados_cliente[col] = dependentes
-        elif col == 'restringido':
-            dados_cliente[col] = 1 if restringido == "Sim" else 0
-        elif col in ['historico_inadimplencia', 'inadimplente_anterior']:
-            dados_cliente[col] = 1 if historico_inadimplencia == "Sim" else 0
+    # Preencher as colunas mapeadas do formulário
+    for col in colunas_esperadas:
+        col_lower = col.lower()
+        if col_lower == 'idade':
+            dados_dict[col] = [idade]
+        elif 'renda' in col_lower:
+            dados_dict[col] = [renda_mensal]
+        elif 'linha' in col_lower or 'credito' in col_lower:
+            dados_dict[col] = [num_linhas_credito]
+        elif 'depend' in col_lower:
+            dados_dict[col] = [dependentes]
+        elif 'restrin' in col_lower:
+            dados_dict[col] = [1 if restringido == "Sim" else 0]
+        elif 'inadimpl' in col_lower or 'historico' in col_lower:
+            dados_dict[col] = [1 if historico_inadimplencia == "Sim" else 0]
 
-    # Garantir a ordem exata das colunas
-    dados_cliente = dados_cliente[df_sample.columns]
-
+    # Montar o DataFrame respeitando estritamente a ordem exata das colunas esperadas
+    dados_cliente = pd.DataFrame(dados_dict)[colunas_esperadas]
+    
     # Previsão
     prob = pipeline.predict_proba(dados_cliente)[0][1]
     
