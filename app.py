@@ -24,7 +24,7 @@ with st.form("form_credito"):
     
     with col1:
         idade = st.number_input("Idade", min_value=18, max_value=100, value=35)
-        renda = st.number_input("Renda Mensal (R$)", min_value=0.0, value=5000.0)
+        renda_mensal = st.number_input("Renda Mensal (R$)", min_value=0.0, value=5000.0)
         num_linhas_credito = st.number_input("Número de Linhas de Crédito", min_value=0, value=3)
         
     with col2:
@@ -34,10 +34,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # Montar DataFrame com os dados introduzidos (ajuste os nomes das colunas conforme o seu dataset original)
+    # Ajuste dos nomes das colunas exigidos pelo preparo_dados.py
     dados_cliente = pd.DataFrame([{
         'idade': idade,
-        'renda': renda,
+        'renda_mensal': renda_mensal,
         'num_linhas_credito': num_linhas_credito,
         'restringido': 1 if restringido == "Sim" else 0,
         'historico_inadimplencia': 1 if historico_inadimplencia == "Sim" else 0
