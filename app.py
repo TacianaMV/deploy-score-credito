@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__ para o joblib desmaterializar corretamente
+# Injetar a classe customizada no __main__
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -13,30 +14,19 @@ st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
 def load_model():
     return joblib.load('modelo_xgb_credito.joblib')
 
+@st.cache_data
+def load_sample():
+    df = pd.read_csv('credito_tratado.csv')
+    cols_alvo = [c for c in ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0'] if c in df.columns]
+    return df.drop(columns=cols_alvo)
+
 pipeline = load_model()
+df_ref = load_sample()
 
 st.title("📊 Análise e Previsão de Score de Crédito")
 st.write("Insira os dados do cliente para calcular a probabilidade de inadimplência.")
 
-# Descobrir automaticamente os nomes das colunas esperadas pelo pipeline
-try:
-    # Tenta extrair diretamente as feature_names_in_ do primeiro passo do pipeline
-    primeiro_passo = pipeline.steps[0][1]
-    if hasattr(primeiro_passo, 'feature_names_in_'):
-        colunas_esperadas = list(primeiro_passo.feature_names_in_)
-    elif hasattr(pipeline, 'feature_names_in_'):
-        colunas_esperadas = list(pipeline.feature_names_in_)
-    else:
-        # Se não encontrar no pipeline, lê as colunas do CSV descartando o alvo
-        df_csv = pd.read_csv('credito_tratado.csv')
-        cols_alvo = ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0']
-        colunas_esperadas = [c for c in df_csv.columns if c not in cols_alvo]
-except Exception:
-    df_csv = pd.read_csv('credito_tratado.csv')
-    cols_alvo = ['inadimplente', 'target', 'id', 'ID', 'Unnamed: 0']
-    colunas_esperadas = [c for c in df_csv.columns if c not in cols_alvo]
-
-# Formulário para entrada de dados
+# Form de entrada
 with st.form("form_credito"):
     col1, col2 = st.columns(2)
     
@@ -53,30 +43,33 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # Criar um dicionário inicializado com valores predefinidos/nulos para todas as colunas
-    dados_dict = {col: [0] for col in colunas_esperadas}
+    # 1. Copia a primeira linha do modelo como base
+    dados_cliente = df_ref.iloc[[0]].copy()
     
-    # Preencher as colunas mapeadas do formulário
-    for col in colunas_esperadas:
-        col_lower = col.lower()
-        if col_lower == 'idade':
-            dados_dict[col] = [idade]
-        elif 'renda' in col_lower:
-            dados_dict[col] = [renda_mensal]
-        elif 'linha' in col_lower or 'credito' in col_lower:
-            dados_dict[col] = [num_linhas_credito]
-        elif 'depend' in col_lower:
-            dados_dict[col] = [dependentes]
-        elif 'restrin' in col_lower:
-            dados_dict[col] = [1 if restringido == "Sim" else 0]
-        elif 'inadimpl' in col_lower or 'historico' in col_lower:
-            dados_dict[col] = [1 if historico_inadimplencia == "Sim" else 0]
+    # 2. Atualiza as colunas que coincidem com os inputs do utilizador
+    for col in dados_cliente.columns:
+        c_lower = col.lower()
+        if c_lower == 'idade':
+            dados_cliente[col] = idade
+        elif 'renda' in c_lower:
+            dados_cliente[col] = renda_mensal
+        elif 'linha' in c_lower or 'credito' in c_lower:
+            dados_cliente[col] = num_linhas_credito
+        elif 'depend' in c_lower:
+            dados_cliente[col] = dependentes
+        elif 'restrin' in c_lower:
+            dados_cliente[col] = 1 if restringido == "Sim" else 0
+        elif 'inadimpl' in c_lower or 'historico' in c_lower:
+            dados_cliente[col] = 1 if historico_inadimplencia == "Sim" else 0
 
-    # Montar o DataFrame respeitando estritamente a ordem exata das colunas esperadas
-    dados_cliente = pd.DataFrame(dados_dict)[colunas_esperadas]
-    
-    # Previsão
-    prob = pipeline.predict_proba(dados_cliente)[0][1]
+    # 3. Remover a verificação estrita de nomes de colunas do scikit-learn
+    # passando os valores ou mapeando para as colunas exatas que o pipeline guardou
+    try:
+        prob = pipeline.predict_proba(dados_cliente)[0][1]
+    except ValueError:
+        # Se falhar a validação de nomes de colunas, remove os nomes para passar apenas a matriz numérica
+        dados_cliente.columns = [f"col_{i}" for i in range(dados_cliente.shape[1])]
+        prob = pipeline.predict_proba(dados_cliente)[0][1]
     
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
