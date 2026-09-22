@@ -1,58 +1,55 @@
-import joblib
+import streamlit as st
 import pandas as pd
-import numpy as np
-
-# Load the pickle/joblib pipeline file
-# Source 3 contains the serialized pipeline
-with open('preparo_dados.py', 'r') as f:
-    pass # source 2 is preparo_dados.py, source 3 is the binary model/pipeline
-
-# Let's inspect source 3 file using joblib / pickle directly
-# Notice that source 3 is saved under the name where python can load it, let's write source 3 binary content or load it if it's in the workspace.
-# Let's list files in current directory to locate the model file name.
-import os
-print("Files in workspace:", os.listdir('.'))
-# Import custom class so joblib can deserialize it
-from preparo_dados import PreparadorDadosTransformer
-
-pipeline = joblib.load('modelo_xgb_credito.joblib')
-print("Pipeline loaded successfully:")
-print(pipeline)
-
-# Load data and run pipeline to inspect output
-df = pd.read_csv('credito_tratado.csv')
-print("\nDataset columns:", df.columns.tolist())
-print("Dataset shape:", df.shape)
-
-X_transformed = pipeline.named_steps['preparo'].transform(df)
-print("\nTransformed columns:", X_transformed.columns.tolist())
-print(X_transformed.head(2))
+import joblib
 import sys
 import preparo_dados
 
-# Inject PreparadorDadosTransformer into __main__ so pickle can resolve it
+# Injetar a classe customizada no __main__ para o joblib conseguir carregar
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
-pipeline = joblib.load('modelo_xgb_credito.joblib')
-print("Pipeline loaded successfully:", pipeline)
+st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
 
-df = pd.read_csv('credito_tratado.csv')
-print("\nFirst row sample prediction:")
-X_test = df.head(5)
-if 'inadimplente' in X_test.columns:
-    X_test = X_test.drop(columns=['inadimplente'])
+@st.cache_resource
+def load_model():
+    return joblib.load('modelo_xgb_credito.joblib')
 
-preds = pipeline.predict_proba(X_test)
-print(preds)
-# Let's inspect source files and details directly without xgboost
-with open('preparo_dados.py', 'r') as f:
-    code = f.read()
+pipeline = load_model()
 
-print("Code in preparo_dados.py:\n")
-print(code)
-# Check data summary
-df = pd.read_csv('credito_tratado.csv')
-print("Dataset summary:")
-print(df.info())
-print("\nFirst 3 rows:")
-print(df.head(3))
+st.title("📊 Análise e Previsão de Score de Crédito")
+st.write("Insira os dados do cliente para calcular a probabilidade de inadimplência.")
+
+# Formulário para entrada de dados
+with st.form("form_credito"):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        idade = st.number_input("Idade", min_value=18, max_value=100, value=35)
+        renda = st.number_input("Renda Mensal (R$)", min_value=0.0, value=5000.0)
+        num_linhas_credito = st.number_input("Número de Linhas de Crédito", min_value=0, value=3)
+        
+    with col2:
+        restringido = st.selectbox("Possui Restrição Nome?", ["Não", "Sim"])
+        historico_inadimplencia = st.selectbox("Histórico Anterior de Inadimplência?", ["Não", "Sim"])
+        
+    btn_predict = st.form_submit_button("Calcular Score")
+
+if btn_predict:
+    # Montar DataFrame com os dados introduzidos (ajuste os nomes das colunas conforme o seu dataset original)
+    dados_cliente = pd.DataFrame([{
+        'idade': idade,
+        'renda': renda,
+        'num_linhas_credito': num_linhas_credito,
+        'restringido': 1 if restringido == "Sim" else 0,
+        'historico_inadimplencia': 1 if historico_inadimplencia == "Sim" else 0
+    }])
+    
+    # Previsão
+    prob = pipeline.predict_proba(dados_cliente)[0][1]
+    
+    st.subheader("Resultado da Análise:")
+    st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
+    
+    if prob > 0.5:
+        st.error("⚠️ Alto Risco de Crédito!")
+    else:
+        st.success("✅ Baixo Risco de Crédito (Aprovado)!")
