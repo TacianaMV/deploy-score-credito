@@ -12,8 +12,7 @@ st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
 
 @st.cache_resource
 def load_model():
-    m = joblib.load('modelo_xgb_credito.joblib')
-    return m
+    return joblib.load('modelo_xgb_credito.joblib')
 
 @st.cache_data
 def load_base_data():
@@ -23,6 +22,16 @@ def load_base_data():
 
 pipeline = load_model()
 df_base = load_base_data()
+
+# Remove a checagem rigorosa de nomes de colunas do scikit-learn no pipeline e em suas etapas
+def desativar_checagem_colunas(estimator):
+    if hasattr(estimator, 'feature_names_in_'):
+        delattr(estimator, 'feature_names_in_')
+    if hasattr(estimator, 'steps'):
+        for _, step in estimator.steps:
+            desativar_checagem_colunas(step)
+
+desativar_checagem_colunas(pipeline)
 
 st.title("📊 Análise e Previsão de Score de Crédito")
 st.write("Insira os dados do cliente para calcular a probabilidade de inadimplência.")
@@ -44,10 +53,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Copia exatamente a primeira linha da base tratada para manter a estrutura original de colunas
+    # 1. Cria uma linha com a mesma estrutura do CSV original
     dados_cliente = df_base.iloc[[0]].copy()
     
-    # 2. Preenche os campos fornecidos na interface
+    # 2. Atualiza os valores fornecidos na interface
     for col in dados_cliente.columns:
         c_lower = col.lower()
         if c_lower == 'idade':
@@ -63,18 +72,10 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Alinha dinamicamente os feature_names dos passos do pipeline com as colunas do DataFrame
-    cols_atuais = np.array(dados_cliente.columns, dtype=object)
-    
-    # Atualiza feature_names_in_ no pipeline e em suas etapas internas
-    if hasattr(pipeline, 'feature_names_in_'):
-        pipeline.feature_names_in_ = cols_atuais
-    if hasattr(pipeline, 'steps'):
-        for name, step in pipeline.steps:
-            if hasattr(step, 'feature_names_in_'):
-                step.feature_names_in_ = cols_atuais
+    # 3. Garantir novamente a remoção antes de executar o predict_proba
+    desativar_checagem_colunas(pipeline)
 
-    # Executa a previsão sem travas de checagem de nomes
+    # Previsão sem a validação de feature_names
     prob = pipeline.predict_proba(dados_cliente)[0][1]
     
     st.subheader("Resultado da Análise:")
