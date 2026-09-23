@@ -5,7 +5,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__ para desserialização do joblib
+# Injetar a classe customizada no __main__ para o joblib carregar corretamente
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -43,40 +43,35 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Identificar as colunas esperadas pelo primeiro passo do pipeline (ou pelo CSV base)
-    first_step = pipeline.steps[0][1] if hasattr(pipeline, 'steps') else None
+    # 1. Copia a estrutura exata da base de dados original
+    dados_cliente = df_base.iloc[[0]].copy()
     
-    if first_step and hasattr(first_step, 'feature_names_in_'):
-        colunas_esperadas = list(first_step.feature_names_in_)
-    elif hasattr(pipeline, 'feature_names_in_'):
-        colunas_esperadas = list(pipeline.feature_names_in_)
-    else:
-        colunas_esperadas = list(df_base.columns)
-
-    # 2. Construir uma linha com todas as colunas mantendo os nomes exatos
-    dados_dict = {}
-    for col in colunas_esperadas:
+    # 2. Atualiza os valores fornecidos pelo usuário preservando os tipos e nomes
+    for col in dados_cliente.columns:
         c_lower = col.lower()
         if c_lower == 'idade':
-            dados_dict[col] = float(idade)
+            dados_cliente[col] = float(idade)
         elif 'renda' in c_lower and 'faltante' not in c_lower:
-            dados_dict[col] = float(renda_mensal)
+            dados_cliente[col] = float(renda_mensal)
         elif 'linha' in c_lower or 'credito' in c_lower:
-            dados_dict[col] = float(num_linhas_credito)
+            dados_cliente[col] = float(num_linhas_credito)
         elif 'depend' in c_lower:
-            dados_dict[col] = float(dependentes)
+            dados_cliente[col] = float(dependentes)
         elif 'restrin' in c_lower:
-            dados_dict[col] = 1.0 if restringido == "Sim" else 0.0
+            dados_cliente[col] = 1.0 if restringido == "Sim" else 0.0
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
-            dados_dict[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
-        else:
-            # Caso existam outras colunas, preenche com a média/mediana da base
-            dados_dict[col] = float(df_base[col].dropna().mean()) if col in df_base.columns else 0.0
+            dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Criar o DataFrame com os nomes de colunas estritamente ordenados
-    dados_cliente = pd.DataFrame([dados_dict])[colunas_esperadas]
+    # 3. Força os nomes de colunas esperados pelo pipeline se existirem em feature_names_in_
+    try:
+        if hasattr(pipeline, 'feature_names_in_'):
+            dados_cliente = dados_cliente[pipeline.feature_names_in_]
+        elif hasattr(pipeline.steps[0][1], 'feature_names_in_'):
+            dados_cliente = dados_cliente[pipeline.steps[0][1].feature_names_in_]
+    except Exception:
+        pass
 
-    # Previsão direta mantendo a estrutura do DataFrame Pandas
+    # Previsão
     prob = pipeline.predict_proba(dados_cliente)[0][1]
     
     st.subheader("Resultado da Análise:")
