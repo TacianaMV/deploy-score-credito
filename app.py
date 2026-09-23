@@ -5,7 +5,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada para desserialização do joblib
+# Injetar a classe customizada no __main__ para o joblib carregar corretamente
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -41,20 +41,21 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Tentar obter os nomes exatos das colunas do modelo
+    # 1. Recuperar o primeiro estimador do pipeline
     first_step = pipeline.steps[0][1] if hasattr(pipeline, 'steps') else pipeline
+    
+    # 2. Obter a lista de colunas esperadas pelo modelo
     cols_esperadas = None
-
     if hasattr(first_step, 'feature_names_in_'):
         cols_esperadas = list(first_step.feature_names_in_)
     elif hasattr(pipeline, 'feature_names_in_'):
         cols_esperadas = list(pipeline.feature_names_in_)
 
-    # 2. Se não houver feature_names_in_, verificar a quantidade n_features_in_
+    # 3. Descobrir a quantidade exata de features esperadas
     n_expected = getattr(first_step, 'n_features_in_', getattr(pipeline, 'n_features_in_', None))
 
     if cols_esperadas:
-        # Reconstruir dicionário com os nomes das colunas esperadas
+        # Reconstruir o DataFrame exatamente com os nomes esperados pelo pipeline
         dados_dict = {}
         for col in cols_esperadas:
             if col in df_base.columns:
@@ -63,15 +64,19 @@ if btn_predict:
                 dados_dict[col] = 0.0
         dados_cliente = pd.DataFrame([dados_dict])[cols_esperadas]
     else:
-        # Se usamos o df_base
-        dados_cliente = df_base.iloc[[0]].copy()
-        # Se a quantidade esperada for maior que o número de colunas do df_base, preencher com colunas dummy
-        if n_expected and dados_cliente.shape[1] < n_expected:
-            massa_faltante = n_expected - dados_cliente.shape[1]
-            for i in range(massa_faltante):
-                dados_cliente[f'col_aux_{i}'] = 0.0
+        # Se não houver feature_names_in_, cria um DataFrame com n_expected colunas
+        if n_expected is None:
+            n_expected = df_base.shape[1]
+        
+        # Garante que o DataFrame tenha exatamente o tamanho n_expected
+        if df_base.shape[1] >= n_expected:
+            dados_cliente = df_base.iloc[[0], :n_expected].copy()
+        else:
+            dados_cliente = df_base.iloc[[0]].copy()
+            for i in range(n_expected - df_base.shape[1]):
+                dados_cliente[f'feature_extra_{i}'] = 0.0
 
-    # 3. Atualizar os valores informados pelo usuário
+    # 4. Atualizar os campos informados no formulário
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
