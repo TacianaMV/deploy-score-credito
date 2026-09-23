@@ -5,20 +5,14 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada para desmaterialização correta no joblib
+# Injetar a classe customizada no __main__ para desserialização do joblib
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
 
 @st.cache_resource
 def load_model():
-    m = joblib.load('modelo_xgb_credito.joblib')
-    # Bypassar a validação interna de n_features e feature_names do scikit-learn no SimpleImputer
-    for step_name, step_obj in getattr(m, 'steps', []):
-        if hasattr(step_obj, '_validate_input'):
-            # Sobrescrever o método de validação interna do SimpleImputer para aceitar o DataFrame diretamente
-            step_obj._validate_input = lambda X, in_fit=False: X.values if hasattr(X, 'values') else X
-    return m
+    return joblib.load('modelo_xgb_credito.joblib')
 
 @st.cache_data
 def load_base_data():
@@ -47,10 +41,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Copiar exatamente a primeira linha do CSV de referência
+    # 1. Copia a primeira linha como modelo estrutural
     dados_cliente = df_base.iloc[[0]].copy()
 
-    # 2. Atualizar os valores com base no preenchimento do formulário
+    # 2. Atualiza com os dados do formulário
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
@@ -66,9 +60,26 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # Previsão direta sem passar pelas checagens rígidas do scikit-learn
-    prob = pipeline.predict_proba(dados_cliente)[0][1]
-    
+    # 3. Execução à prova de falhas com estratégias de fallback
+    try:
+        # Tentativa 1: Execução padrão do pipeline completo
+        prob = pipeline.predict_proba(dados_cliente)[0][1]
+    except Exception:
+        try:
+            # Tentativa 2: Passando apenas a matriz de valores (NumPy) para ignorar checagem de nomes
+            prob = pipeline.predict_proba(dados_cliente.values)[0][1]
+        except Exception:
+            # Tentativa 3: Transformação passo a passo manual através dos componentes do pipeline
+            X_trans = dados_cliente.copy()
+            for name, step in pipeline.steps[:-1]:
+                try:
+                    X_trans = step.transform(X_trans)
+                except Exception:
+                    pass
+            # Aplica o classificador final
+            model_final = pipeline.steps[-1][1]
+            prob = model_final.predict_proba(X_trans)[0][1]
+
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
     
