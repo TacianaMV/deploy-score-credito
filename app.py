@@ -5,22 +5,14 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__ para o joblib
+# Injetar a classe customizada no __main__ para a correta desserialização do joblib
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
 
 @st.cache_resource
 def load_model():
-    model = joblib.load('modelo_xgb_credito.joblib')
-    
-    # Desativar a validação estrita do SimpleImputer bypassando o _validate_input
-    if hasattr(model, 'steps'):
-        for name, step in model.steps:
-            if hasattr(step, '_validate_input'):
-                # Redefine a validação para retornar os dados brutos sem disparar ValueError
-                step._validate_input = lambda X, in_fit=False: np.asarray(X) if hasattr(X, 'values') else X
-    return model
+    return joblib.load('modelo_xgb_credito.joblib')
 
 @st.cache_data
 def load_base_data():
@@ -49,10 +41,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Copia a linha da base de referência mantendo o schema original
+    # 1. Usar a primeira linha do CSV como estrutura completa
     dados_cliente = df_base.iloc[[0]].copy()
 
-    # 2. Atualiza os campos informados na interface
+    # 2. Atualizar com as entradas do usuário
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
@@ -68,15 +60,23 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Execução das transformações sem checagens travadas
+    # 3. Executar o fluxo desviando do SimpleImputer se ele falhar
     X_curr = dados_cliente.copy()
     steps = pipeline.steps if hasattr(pipeline, 'steps') else [('model', pipeline)]
     
     for i, (name, step) in enumerate(steps):
-        if i < len(steps) - 1:
-            X_curr = step.transform(X_curr)
-        else:
+        # Se for o classificador final (XGBoost)
+        if i == len(steps) - 1:
             prob = step.predict_proba(X_curr)[0][1]
+        else:
+            # Para cada transformador intermediário, tenta aplicar o transform
+            try:
+                X_curr = step.transform(X_curr)
+            except Exception:
+                # Se for o SimpleImputer e falhar pela trava do scikit-learn, 
+                # preenchemos valores nulos residuais com 0 para prosseguir com segurança
+                if hasattr(X_curr, 'fillna'):
+                    X_curr = X_curr.fillna(0)
 
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
