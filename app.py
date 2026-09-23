@@ -43,10 +43,30 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Copia exatamente a primeira linha do CSV base para manter todas as colunas originais do treino
-    dados_cliente = df_base.iloc[[0]].copy()
-    
-    # 2. Atualiza os valores dos campos preenchidos na interface
+    # 1. Identifica a lista exata de colunas gravadas no modelo durante o treino
+    cols_modelo = None
+    first_step = pipeline.steps[0][1] if hasattr(pipeline, 'steps') else pipeline
+
+    if hasattr(first_step, 'feature_names_in_'):
+        cols_modelo = list(first_step.feature_names_in_)
+    elif hasattr(pipeline, 'feature_names_in_'):
+        cols_modelo = list(pipeline.feature_names_in_)
+
+    # 2. Se as colunas estiverem salvas no modelo, usamos essa lista; caso contrário, usamos as do CSV base
+    if cols_modelo:
+        # Reconstrói uma linha zerada/com médias do CSV base para cada coluna esperada
+        dados_dict = {}
+        for col in cols_modelo:
+            if col in df_base.columns:
+                dados_dict[col] = float(df_base[col].dropna().mean())
+            else:
+                dados_dict[col] = 0.0
+        dados_cliente = pd.DataFrame([dados_dict])[cols_modelo]
+    else:
+        # Usa exatamente a linha 0 do CSV base
+        dados_cliente = df_base.iloc[[0]].copy()
+
+    # 3. Preenche/atualiza os dados digitados na interface
     for col in dados_cliente.columns:
         c_lower = col.lower()
         if c_lower == 'idade':
@@ -62,21 +82,7 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Ajusta dinamicamente a contagem de colunas esperada (n_features_in_) nos passos do pipeline
-    num_cols = dados_cliente.shape[1]
-    
-    def ajustar_validacao_pipeline(estimator, n_cols):
-        if hasattr(estimator, 'n_features_in_'):
-            estimator.n_features_in_ = n_cols
-        if hasattr(estimator, 'feature_names_in_'):
-            delattr(estimator, 'feature_names_in_')
-        if hasattr(estimator, 'steps'):
-            for _, step in estimator.steps:
-                ajustar_validacao_pipeline(step, n_cols)
-
-    ajustar_validacao_pipeline(pipeline, num_cols)
-
-    # Executa a previsão
+    # 4. Executa a previsão
     prob = pipeline.predict_proba(dados_cliente)[0][1]
     
     st.subheader("Resultado da Análise:")
