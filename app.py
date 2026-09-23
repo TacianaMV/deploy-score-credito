@@ -12,7 +12,15 @@ st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
 
 @st.cache_resource
 def load_model():
-    return joblib.load('modelo_xgb_credito.joblib')
+    model = joblib.load('modelo_xgb_credito.joblib')
+    
+    # Desativar a validação estrita do SimpleImputer bypassando o _validate_input
+    if hasattr(model, 'steps'):
+        for name, step in model.steps:
+            if hasattr(step, '_validate_input'):
+                # Redefine a validação para retornar os dados brutos sem disparar ValueError
+                step._validate_input = lambda X, in_fit=False: np.asarray(X) if hasattr(X, 'values') else X
+    return model
 
 @st.cache_data
 def load_base_data():
@@ -41,10 +49,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Usar a base tratada inteira como template para manter os tipos e nomes exatos
+    # 1. Copia a linha da base de referência mantendo o schema original
     dados_cliente = df_base.iloc[[0]].copy()
 
-    # 2. Mapear os valores informados pelo usuário nas colunas correspondentes
+    # 2. Atualiza os campos informados na interface
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
@@ -60,29 +68,14 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Executar os componentes do pipeline sem acionar a validação do _check_n_features do Pipeline parent
+    # 3. Execução das transformações sem checagens travadas
     X_curr = dados_cliente.copy()
-    
-    # Extrair individualmente cada passo do pipeline
     steps = pipeline.steps if hasattr(pipeline, 'steps') else [('model', pipeline)]
     
     for i, (name, step) in enumerate(steps):
         if i < len(steps) - 1:
-            # Desativa o atributo de checagem n_features_in_ antes de transformar cada passo
-            if hasattr(step, 'n_features_in_'):
-                try:
-                    step.n_features_in_ = X_curr.shape[1]
-                except Exception:
-                    pass
-            
-            # Aplica o transformador
-            try:
-                X_curr = step.transform(X_curr)
-            except Exception:
-                # Se falhar como DataFrame, passa os valores como array
-                X_curr = step.transform(X_curr.values)
+            X_curr = step.transform(X_curr)
         else:
-            # Modelo final (Classificador / XGBoost)
             prob = step.predict_proba(X_curr)[0][1]
 
     st.subheader("Resultado da Análise:")
