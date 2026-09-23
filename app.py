@@ -5,7 +5,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__ para a correta desserialização do joblib
+# Injetar a classe customizada no __main__ para o joblib
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -41,10 +41,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Usar a primeira linha do CSV como estrutura completa
+    # 1. Copiar a linha da base de referência
     dados_cliente = df_base.iloc[[0]].copy()
 
-    # 2. Atualizar com as entradas do usuário
+    # 2. Preencher os valores com as entradas do formulário
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
@@ -60,23 +60,30 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Executar o fluxo desviando do SimpleImputer se ele falhar
-    X_curr = dados_cliente.copy()
-    steps = pipeline.steps if hasattr(pipeline, 'steps') else [('model', pipeline)]
-    
-    for i, (name, step) in enumerate(steps):
-        # Se for o classificador final (XGBoost)
-        if i == len(steps) - 1:
-            prob = step.predict_proba(X_curr)[0][1]
-        else:
-            # Para cada transformador intermediário, tenta aplicar o transform
-            try:
-                X_curr = step.transform(X_curr)
-            except Exception:
-                # Se for o SimpleImputer e falhar pela trava do scikit-learn, 
-                # preenchemos valores nulos residuais com 0 para prosseguir com segurança
-                if hasattr(X_curr, 'fillna'):
-                    X_curr = X_curr.fillna(0)
+    # 3. Aplicar a transformação do PreparadorDadosTransformer
+    preparador = preparo_dados.PreparadorDadosTransformer()
+    dados_preparados = preparador.fit_transform(dados_cliente)
+
+    # 4. Extrair o estimador final (XGBoost) do pipeline
+    xgb_model = pipeline.steps[-1][1] if hasattr(pipeline, 'steps') else pipeline
+
+    # 5. Ajustar e alinhar o número de colunas exato exigido pelo XGBoost
+    if hasattr(xgb_model, 'feature_names_in_'):
+        cols_xgb = list(xgb_model.feature_names_in_)
+        for c in cols_xgb:
+            if c not in dados_preparados.columns:
+                dados_preparados[c] = 0.0
+        dados_preparados = dados_preparados[cols_xgb]
+    elif hasattr(xgb_model, 'n_features_in_'):
+        n_req = xgb_model.n_features_in_
+        if dados_preparados.shape[1] < n_req:
+            for i in range(n_req - dados_preparados.shape[1]):
+                dados_preparados[f'col_aux_{i}'] = 0.0
+        elif dados_preparados.shape[1] > n_req:
+            dados_preparados = dados_preparados.iloc[:, :n_req]
+
+    # Previsão final
+    prob = xgb_model.predict_proba(dados_preparados)[0][1]
 
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
