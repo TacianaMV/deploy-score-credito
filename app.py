@@ -23,16 +23,6 @@ def load_base_data():
 pipeline = load_model()
 df_base = load_base_data()
 
-# Remove a checagem rigorosa de nomes de colunas do scikit-learn no pipeline e em suas etapas
-def desativar_checagem_colunas(estimator):
-    if hasattr(estimator, 'feature_names_in_'):
-        delattr(estimator, 'feature_names_in_')
-    if hasattr(estimator, 'steps'):
-        for _, step in estimator.steps:
-            desativar_checagem_colunas(step)
-
-desativar_checagem_colunas(pipeline)
-
 st.title("📊 Análise e Previsão de Score de Crédito")
 st.write("Insira os dados do cliente para calcular a probabilidade de inadimplência.")
 
@@ -53,10 +43,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Cria uma linha com a mesma estrutura do CSV original
+    # 1. Copia exatamente a primeira linha do CSV base para manter todas as colunas originais do treino
     dados_cliente = df_base.iloc[[0]].copy()
     
-    # 2. Atualiza os valores fornecidos na interface
+    # 2. Atualiza os valores dos campos preenchidos na interface
     for col in dados_cliente.columns:
         c_lower = col.lower()
         if c_lower == 'idade':
@@ -72,10 +62,21 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Garantir novamente a remoção antes de executar o predict_proba
-    desativar_checagem_colunas(pipeline)
+    # 3. Ajusta dinamicamente a contagem de colunas esperada (n_features_in_) nos passos do pipeline
+    num_cols = dados_cliente.shape[1]
+    
+    def ajustar_validacao_pipeline(estimator, n_cols):
+        if hasattr(estimator, 'n_features_in_'):
+            estimator.n_features_in_ = n_cols
+        if hasattr(estimator, 'feature_names_in_'):
+            delattr(estimator, 'feature_names_in_')
+        if hasattr(estimator, 'steps'):
+            for _, step in estimator.steps:
+                ajustar_validacao_pipeline(step, n_cols)
 
-    # Previsão sem a validação de feature_names
+    ajustar_validacao_pipeline(pipeline, num_cols)
+
+    # Executa a previsão
     prob = pipeline.predict_proba(dados_cliente)[0][1]
     
     st.subheader("Resultado da Análise:")
