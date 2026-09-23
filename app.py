@@ -5,7 +5,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__ para desserialização do joblib
+# Injetar a classe customizada no __main__ para o joblib carregar corretamente
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -41,10 +41,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Copia a primeira linha como modelo estrutural
+    # 1. Usar a linha inteira da base de referência para manter colunas e tipos idênticos ao treino
     dados_cliente = df_base.iloc[[0]].copy()
 
-    # 2. Atualiza com os dados do formulário
+    # 2. Atualizar apenas os valores introduzidos no formulário
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
@@ -60,25 +60,25 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Execução à prova de falhas com estratégias de fallback
-    try:
-        # Tentativa 1: Execução padrão do pipeline completo
-        prob = pipeline.predict_proba(dados_cliente)[0][1]
-    except Exception:
-        try:
-            # Tentativa 2: Passando apenas a matriz de valores (NumPy) para ignorar checagem de nomes
-            prob = pipeline.predict_proba(dados_cliente.values)[0][1]
-        except Exception:
-            # Tentativa 3: Transformação passo a passo manual através dos componentes do pipeline
-            X_trans = dados_cliente.copy()
-            for name, step in pipeline.steps[:-1]:
+    # 3. Execução direta contornando as travas de verificação de n_features do scikit-learn
+    # Transformação sequencial manual nos passos do pipeline mantendo os nomes de colunas
+    X_trans = dados_cliente.copy()
+    
+    for step_name, step_obj in pipeline.steps:
+        if step_name != pipeline.steps[-1][0]:  # Se não for o estimador final (XGBoost)
+            # Desativar a validação estrita do scikit-learn no transformador
+            if hasattr(step_obj, '_validate_input'):
                 try:
-                    X_trans = step.transform(X_trans)
+                    X_trans = step_obj.transform(X_trans)
                 except Exception:
-                    pass
-            # Aplica o classificador final
-            model_final = pipeline.steps[-1][1]
-            prob = model_final.predict_proba(X_trans)[0][1]
+                    # Se falhar por nome de coluna, tenta passar sem validação
+                    if hasattr(X_trans, 'values'):
+                        X_trans = step_obj.transform(X_trans.values)
+            else:
+                X_trans = step_obj.transform(X_trans)
+        else:
+            # Estimador final (XGBoost / Classificador)
+            prob = step_obj.predict_proba(X_trans)[0][1]
 
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
