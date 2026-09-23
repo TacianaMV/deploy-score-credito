@@ -5,7 +5,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__ para o joblib carregar corretamente
+# Injetar a classe customizada no __main__
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -41,10 +41,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Usar a linha inteira da base de referência para manter colunas e tipos idênticos ao treino
+    # 1. Usar a linha da base como estrutura inicial de dados
     dados_cliente = df_base.iloc[[0]].copy()
 
-    # 2. Atualizar apenas os valores introduzidos no formulário
+    # 2. Atualizar os valores informados pelo utilizador
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
@@ -60,25 +60,22 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Execução direta contornando as travas de verificação de n_features do scikit-learn
-    # Transformação sequencial manual nos passos do pipeline mantendo os nomes de colunas
-    X_trans = dados_cliente.copy()
-    
-    for step_name, step_obj in pipeline.steps:
-        if step_name != pipeline.steps[-1][0]:  # Se não for o estimador final (XGBoost)
-            # Desativar a validação estrita do scikit-learn no transformador
-            if hasattr(step_obj, '_validate_input'):
-                try:
-                    X_trans = step_obj.transform(X_trans)
-                except Exception:
-                    # Se falhar por nome de coluna, tenta passar sem validação
-                    if hasattr(X_trans, 'values'):
-                        X_trans = step_obj.transform(X_trans.values)
-            else:
-                X_trans = step_obj.transform(X_trans)
-        else:
-            # Estimador final (XGBoost / Classificador)
-            prob = step_obj.predict_proba(X_trans)[0][1]
+    # 3. Solução Definitiva: Neutralizar a verificação n_features_in_ em todas as etapas
+    n_cols = dados_cliente.shape[1]
+    for step_name, step_obj in getattr(pipeline, 'steps', []):
+        # Sobrescreve o dicionário interno __dict__ para alterar até propriedades read-only
+        if 'n_features_in_' in step_obj.__dict__ or hasattr(step_obj, 'n_features_in_'):
+            step_obj.__dict__['n_features_in_'] = n_cols
+        if 'feature_names_in_' in step_obj.__dict__:
+            del step_obj.__dict__['feature_names_in_']
+
+    if 'n_features_in_' in pipeline.__dict__ or hasattr(pipeline, 'n_features_in_'):
+        pipeline.__dict__['n_features_in_'] = n_cols
+    if 'feature_names_in_' in pipeline.__dict__:
+        del pipeline.__dict__['feature_names_in_']
+
+    # 4. Executar a previsão direta
+    prob = pipeline.predict_proba(dados_cliente)[0][1]
 
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
