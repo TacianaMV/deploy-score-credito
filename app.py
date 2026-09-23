@@ -5,7 +5,7 @@ import joblib
 import sys
 import preparo_dados
 
-# Injetar a classe customizada no __main__
+# Injetar a classe customizada no __main__ para desserialização correta no joblib
 sys.modules['__main__'].PreparadorDadosTransformer = preparo_dados.PreparadorDadosTransformer
 
 st.set_page_config(page_title="Análise de Score de Crédito", layout="wide")
@@ -41,10 +41,10 @@ with st.form("form_credito"):
     btn_predict = st.form_submit_button("Calcular Score")
 
 if btn_predict:
-    # 1. Usar a linha da base como estrutura inicial de dados
+    # 1. Copia a linha de referência da base
     dados_cliente = df_base.iloc[[0]].copy()
 
-    # 2. Atualizar os valores informados pelo utilizador
+    # 2. Preenche os campos fornecidos pelo utilizador
     for col in dados_cliente.columns:
         c_lower = str(col).lower()
         if c_lower == 'idade':
@@ -60,23 +60,41 @@ if btn_predict:
         elif 'inadimpl' in c_lower or 'historico' in c_lower:
             dados_cliente[col] = 1.0 if historico_inadimplencia == "Sim" else 0.0
 
-    # 3. Solução Definitiva: Neutralizar a verificação n_features_in_ em todas as etapas
-    n_cols = dados_cliente.shape[1]
-    for step_name, step_obj in getattr(pipeline, 'steps', []):
-        # Sobrescreve o dicionário interno __dict__ para alterar até propriedades read-only
-        if 'n_features_in_' in step_obj.__dict__ or hasattr(step_obj, 'n_features_in_'):
-            step_obj.__dict__['n_features_in_'] = n_cols
-        if 'feature_names_in_' in step_obj.__dict__:
-            del step_obj.__dict__['feature_names_in_']
+    # 3. Ajuste dinâmico do número de colunas exigido pelo primeiro passo do pipeline
+    step_0 = pipeline.steps[0][1] if hasattr(pipeline, 'steps') else pipeline
 
-    if 'n_features_in_' in pipeline.__dict__ or hasattr(pipeline, 'n_features_in_'):
-        pipeline.__dict__['n_features_in_'] = n_cols
-    if 'feature_names_in_' in pipeline.__dict__:
-        del pipeline.__dict__['feature_names_in_']
+    if hasattr(step_0, 'feature_names_in_'):
+        cols_req = list(step_0.feature_names_in_)
+        for c in cols_req:
+            if c not in dados_cliente.columns:
+                dados_cliente[c] = 0.0
+        dados_cliente = dados_cliente[cols_req]
+    elif hasattr(step_0, 'n_features_in_'):
+        n_req = step_0.n_features_in_
+        if dados_cliente.shape[1] < n_req:
+            for i in range(n_req - dados_cliente.shape[1]):
+                dados_cliente[f'col_pad_{i}'] = 0.0
+        elif dados_cliente.shape[1] > n_req:
+            dados_cliente = dados_cliente.iloc[:, :n_req]
 
-    # 4. Executar a previsão direta
+    # 4. Ajuste para o SimpleImputer (caso seja o segundo passo do pipeline)
+    if hasattr(pipeline, 'steps') and len(pipeline.steps) > 1:
+        step_1 = pipeline.steps[1][1]
+        if hasattr(step_1, 'n_features_in_'):
+            try:
+                X_test = step_0.transform(dados_cliente.copy())
+                n_out = X_test.shape[1]
+                n_req_1 = step_1.n_features_in_
+                if n_out < n_req_1:
+                    diff = n_req_1 - n_out
+                    for i in range(diff):
+                        dados_cliente[f'feature_extra_{i}'] = 0.0
+            except Exception:
+                pass
+
+    # Executa a previsão
     prob = pipeline.predict_proba(dados_cliente)[0][1]
-
+    
     st.subheader("Resultado da Análise:")
     st.metric(label="Risco de Inadimplência", value=f"{prob * 100:.2f}%")
     
